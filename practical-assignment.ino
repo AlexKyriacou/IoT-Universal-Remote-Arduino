@@ -105,6 +105,9 @@ void loop()
     // IR sender.
     if (Serial.available() > 0)
     {
+      redLed.off();
+      yellowLed.off();
+      greenLed.on();
       // Read the incoming byte
       String message = Serial.readStringUntil('\n');
       // strip \n at end
@@ -119,9 +122,6 @@ void loop()
       {
         IrSender.sendRaw(receivedData.rawData, receivedData.rawDataLength, IR_FREQUENCY);
         Serial.println(F("Sent raw IR data"));
-        redLed.off();
-        yellowLed.off();
-        greenLed.on();
       }
       else
       {
@@ -131,9 +131,6 @@ void loop()
         receivedIRData.command = receivedData.command;
         IrSender.write(&receivedIRData);
         Serial.println(F("Sent IR data"));
-        redLed.off();
-        yellowLed.off();
-        greenLed.on();
       }
     }
     if (button.pressed())
