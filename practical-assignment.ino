@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include "Led.h"
 #include <IRremote.hpp>
 #include <Button.h>
@@ -9,46 +8,34 @@
 #define MARK_EXCESS_MICROS 20 // 20 is recommended for the cheap VS1838 modules.
 // #define DEBUG // Activate this for lots of lovely debug output from the decoders.
 #define EXCLUDE_EXOTIC_PROTOCOLS
-
-#define NUM_LEDS 3
 #define IR_FREQUENCY 38
 
+#define GREEN_LED_PIN 5
+#define YELLOW_LED_PIN 6
+#define RED_LED_PIN 7
+#define BUTTON_PIN 3
+#define IR_RECEIVE_PIN 4
+#define IR_SEND_PIN 2
 
-int DELAY_BETWEEN_REPEAT = 100;
-
-// Storage for the recorded code
-struct storedIRDataStruct
-{
-  IRData receivedIRData;
-  // extensions for sendRaw
-  uint8_t rawCode[RAW_BUFFER_LENGTH]; // The durations if raw
-  uint8_t rawCodeLength;              // The length of the code
-} sStoredIRData;
-
-bool sSendButtonWasActive;
-
-void storeCode();
-void sendCode(storedIRDataStruct *aIRDataToSend);
-
-const int GREEN_LED_PIN = 5;
-const int YELLOW_LED_PIN = 6;
-const int RED_LED_PIN = 7;
-const int BUTTON_PIN = 3;
-const int IR_RECEIVE_PIN = 4;
-const int IR_SEND_PIN = 2;
-
-enum LedState
-{
-  GREEN,
-  YELLOW,
-  RED
-};
 Led greenLed(GREEN_LED_PIN);
 Led yellowLed(YELLOW_LED_PIN);
 Led redLed(RED_LED_PIN);
-Led *leds[] = {&greenLed, &yellowLed, &redLed};
-
 Button button(BUTTON_PIN);
+
+struct DeserializedData
+{
+  uint16_t protocol;
+  uint16_t address;
+  uint16_t command;
+  uint8_t rawData[RAW_BUFFER_LENGTH];
+  uint8_t rawDataLength;
+};
+
+enum Menu
+{
+  RECORD,
+  LISTEN
+};
 
 void setup()
 {
@@ -70,33 +57,16 @@ void setup()
 
   // Sets the button pin to be input with pullup resistor
   button.begin();
-  for (int i = 0; i < NUM_LEDS; i++)
-  {
-    leds[i]->off();
-  }
+  redLed.off();
+  yellowLed.off();
+  greenLed.off();
   IrReceiver.start();
 }
 
-void toggleLed(LedState state)
-{
-  for (int i = 0; i < NUM_LEDS; i++)
-  {
-    if (i == state)
-    {
-      leds[i]->on();
-    }
-    else
-    {
-      leds[i]->off();
-    }
-  }
-}
-
-int menuOption = 0;
-unsigned long lastRepeat = 0;
+Menu menuOption = RECORD;
 void loop()
 {
-  if (menuOption == 0)
+  if (menuOption == RECORD)
   {
     redLed.on();
     // Begin to record new IR codes, if one is recieved and it is unknown then store it and turn
@@ -106,9 +76,9 @@ void loop()
     // if the user presses the button then send the code to the serial monitor.
     if (IrReceiver.decode())
     {
-      storeCode();
+      // storeCode();
       IrReceiver.resume(); // resume receiver
-      if (sStoredIRData.receivedIRData.protocol == UNKNOWN)
+      if (IrReceiver.decodedIRData.protocol == UNKNOWN)
       {
         yellowLed.on();
         greenLed.off();
@@ -121,14 +91,16 @@ void loop()
     }
     if (button.pressed())
     {
-      serialiseAndPrintIRData(&sStoredIRData);
-      menuOption = 1;
+      serialiseIRData(&IrReceiver.decodedIRData);
+      menuOption = LISTEN;
       IrReceiver.stop();
     }
   }
-  if (menuOption == 1)
+  if (menuOption == LISTEN)
   {
-    toggleLed(YELLOW);
+    redLed.off();
+    yellowLed.on();
+    greenLed.off();
     // Listen for Json messages within the serial monitor and then send the IR code to the
     // IR sender.
     if (Serial.available() > 0)
@@ -142,139 +114,33 @@ void loop()
         message.remove(message.length() - 1);
       }
       Serial.println(message);
-      JsonDocument doc;
-      DeserializationError error = deserializeJson(doc, message);
-      toggleLed(YELLOW);
-      if (error)
+      DeserializedData receivedData = deserializeJson(message);
+      if (receivedData.protocol == 0)
       {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.c_str());
-        return;
-      }
-      if (doc.containsKey("PROTOCOL") && doc.containsKey("ADDRESS") && doc.containsKey("COMMAND") && doc.containsKey("RAWDATA") && doc.containsKey("RAWDATALENGTH"))
-      {
-        if (doc["PROTOCOL"] == 0)
-        {
-          uint8_t recievedRawCode[RAW_BUFFER_LENGTH];
-          uint8_t recievedRawCodeLength = doc["RAWDATALENGTH"];
-          for (int i = 0; i < recievedRawCodeLength; i++)
-          {
-            recievedRawCode[i] = doc["RAWDATA"][i];
-          }
-          IrSender.sendRaw(recievedRawCode, recievedRawCodeLength, IR_FREQUENCY);
-          Serial.println(F("Sent raw IR data"));
-          toggleLed(GREEN);
-        }
-        else
-        {
-          IRData receivedIRData;
-          receivedIRData.protocol = doc["PROTOCOL"];
-          receivedIRData.address = doc["ADDRESS"];
-          receivedIRData.command = doc["COMMAND"];
-          IrSender.write(&receivedIRData);
-          Serial.println(F("Sent IR data"));
-          toggleLed(GREEN);
-        }
+        IrSender.sendRaw(receivedData.rawData, receivedData.rawDataLength, IR_FREQUENCY);
+        Serial.println(F("Sent raw IR data"));
+        redLed.off();
+        yellowLed.off();
+        greenLed.on();
       }
       else
       {
-        Serial.println(F("Invalid Json message"));
+        IRData receivedIRData;
+        receivedIRData.protocol = static_cast<decode_type_t>(receivedData.protocol);
+        receivedIRData.address = receivedData.address;
+        receivedIRData.command = receivedData.command;
+        IrSender.write(&receivedIRData);
+        Serial.println(F("Sent IR data"));
+        redLed.off();
+        yellowLed.off();
+        greenLed.on();
       }
     }
     if (button.pressed())
     {
-      menuOption = 0;
+      menuOption = RECORD;
       IrReceiver.start();
     }
-  }
-}
-
-// Stores the code for later playback in sStoredIRData
-// Most of this code is just logging
-void storeCode()
-{
-  if (IrReceiver.decodedIRData.rawDataPtr->rawlen < 4)
-  {
-#ifdef DEBUG
-    Serial.print(F("Ignore data with rawlen="));
-    Serial.println(IrReceiver.decodedIRData.rawDataPtr->rawlen);
-#endif
-    return;
-  }
-  if (IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT)
-  {
-#ifdef DEBUG
-    Serial.println(F("Ignore repeat"));
-#endif
-    return;
-  }
-  if (IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_AUTO_REPEAT)
-  {
-#ifdef DEBUG
-    Serial.println(F("Ignore autorepeat"));
-#endif
-    return;
-  }
-  if (IrReceiver.decodedIRData.flags & IRDATA_FLAGS_PARITY_FAILED)
-  {
-#ifdef DEBUG
-    Serial.println(F("Ignore parity error"));
-#endif
-    return;
-  }
-  /*
-   * Copy decoded data
-   */
-  sStoredIRData.receivedIRData = IrReceiver.decodedIRData;
-  IrReceiver.printIRResultShort(&Serial);
-  IrReceiver.printIRSendUsage(&Serial);
-  if (sStoredIRData.receivedIRData.protocol == UNKNOWN)
-  {
-#ifdef DEBUG
-    Serial.print(F("Received unknown code and store "));
-    Serial.print(IrReceiver.decodedIRData.rawDataPtr->rawlen - 1);
-    Serial.println(F(" timing entries as raw "));
-    IrReceiver.printIRResultRawFormatted(&Serial, true); // Output the results in RAW format
-#endif
-    sStoredIRData.rawCodeLength = IrReceiver.decodedIRData.rawDataPtr->rawlen - 1;
-    // Store the current raw data in a dedicated array for later usage
-    IrReceiver.compensateAndStoreIRResultInArray(sStoredIRData.rawCode);
-  }
-  else
-  {
-#ifdef DEBUG
-    IrReceiver.printIRResultShort(&Serial);
-    IrReceiver.printIRSendUsage(&Serial);
-    IrReceiver.printIRResultAsCVariables(&Serial);
-#endif
-    sStoredIRData.receivedIRData.flags = 0; // clear flags -esp. repeat- for later sending
-    // clear raw data
-    sStoredIRData.rawCodeLength = 0;
-#ifdef DEBUG
-    Serial.println();
-#endif
-  }
-}
-
-void sendCode(storedIRDataStruct *aIRDataToSend)
-{
-  if (aIRDataToSend->receivedIRData.protocol == UNKNOWN /* i.e. raw */)
-  {
-    // Assume 38 KHz
-    IrSender.sendRaw(aIRDataToSend->rawCode, aIRDataToSend->rawCodeLength, IR_FREQUENCY);
-#ifdef DEBUG
-    Serial.print(F("raw "));
-    Serial.print(aIRDataToSend->rawCodeLength);
-    Serial.println(F(" marks or spaces"));
-#endif
-  }
-  else
-  {
-    // Use the write function, which does the switch for different protocols
-    IrSender.write(&aIRDataToSend->receivedIRData);
-#ifdef DEBUG
-    printIRResultShort(&Serial, &aIRDataToSend->receivedIRData, false);
-#endif
   }
 }
 
@@ -284,27 +150,109 @@ void sendCode(storedIRDataStruct *aIRDataToSend)
  * and print it to the Serial output in JSON format
  * @param aIRData The stored IR data to serialise and print
  */
-void serialiseAndPrintIRData(storedIRDataStruct *aIRDataToStore)
+void serialiseIRData(IRData *aIRDataToStore)
 {
-  Serial.print("{");
-  Serial.print("\"PROTOCOL\":");
-  Serial.print(aIRDataToStore->receivedIRData.protocol, DEC);
-  Serial.print(",\"ADDRESS\":");
-  Serial.print(aIRDataToStore->receivedIRData.address, DEC);
-  Serial.print(",\"COMMAND\":");
-  Serial.print(aIRDataToStore->receivedIRData.command, DEC);
-  Serial.print(",\"RAWDATA\":[");
-  for (int i = 0; i < sStoredIRData.rawCodeLength; i++)
+  uint8_t rawCode[RAW_BUFFER_LENGTH];
+  uint8_t rawCodeLength = IrReceiver.decodedIRData.rawDataPtr->rawlen - 1;
+  Serial.print(F("{"));
+  Serial.print(F("\"PROTOCOL\":"));
+  Serial.print(aIRDataToStore->protocol, DEC);
+  Serial.print(F(",\"ADDRESS\":"));
+  Serial.print(aIRDataToStore->address, DEC);
+  Serial.print(F(",\"COMMAND\":"));
+  Serial.print(aIRDataToStore->command, DEC);
+  Serial.print(F(",\"RAWDATA\":["));
+  IrReceiver.compensateAndStoreIRResultInArray(rawCode);
+  for (int i = 0; i < rawCodeLength; i++)
   {
-    Serial.print(aIRDataToStore->rawCode[i], DEC);
-    if (i != aIRDataToStore->rawCodeLength - 1)
+    Serial.print(rawCode[i], DEC);
+    if (i != rawCodeLength - 1)
     {
-      Serial.print(", ");
+      Serial.print(",");
     }
   }
-  Serial.print("]");
-  Serial.print(",\"RAWDATALENGTH\":");
-  Serial.print(aIRDataToStore->rawCodeLength, DEC);
-  Serial.print("}");
+  Serial.print(F("]"));
+  Serial.print(F(",\"RAWDATALENGTH\":"));
+  Serial.print(rawCodeLength, DEC);
+  Serial.print(F("}"));
   Serial.println();
+}
+
+DeserializedData deserializeJson(String jsonString)
+{
+  DeserializedData deserializedData;
+  int start, end;
+
+  // Parse protocol
+  start = jsonString.indexOf("PROTOCOL") + 10;
+  end = jsonString.indexOf(",", start);
+  deserializedData.protocol = jsonString.substring(start, end).toInt();
+
+  // Parse address
+  start = jsonString.indexOf("ADDRESS") + 9;
+  end = jsonString.indexOf(",", start);
+  deserializedData.address = jsonString.substring(start, end).toInt();
+
+  // Parse command
+  start = jsonString.indexOf("COMMAND") + 9;
+  end = jsonString.indexOf(",", start);
+  deserializedData.command = jsonString.substring(start, end).toInt();
+
+  // Parse rawDataLength
+  start = jsonString.indexOf("RAWDATALENGTH") + 15;
+  end = jsonString.indexOf("]", start);
+  deserializedData.rawDataLength = jsonString.substring(start, end).toInt();
+
+  if (deserializedData.rawDataLength > RAW_BUFFER_LENGTH)
+  {
+    Serial.println(F("Raw data length exceeds maximum allowed"));
+    return deserializedData;
+  }
+
+  // Parse rawData
+  start = jsonString.indexOf("[") + 1;
+  end = jsonString.indexOf("]", start);
+  String rawDataString = jsonString.substring(start, end);
+  String numberStr;
+  int numCount = 0;
+  for (int i = 0; i < rawDataString.length(); i++)
+  {
+    char c = rawDataString.charAt(i);
+    if (c != ',' && c != ' ') // If the character is not a comma or space, add it to the number string
+    {
+      numberStr += c;
+    }
+    else
+    {
+      if (numberStr.length() > 0 && numCount < RAW_BUFFER_LENGTH)
+      {
+        deserializedData.rawData[numCount++] = numberStr.toInt(); // Store the parsed number in the array
+        numberStr = "";
+      }
+    }
+  }
+  if (numberStr.length() > 0 && numCount < RAW_BUFFER_LENGTH)
+  {
+    deserializedData.rawData[numCount++] = numberStr.toInt(); // Store the last parsed number in the array
+  }
+
+#ifdef DEBUG
+  // Print the deserialized values for verification
+  Serial.print(F("Protocol: "));
+  Serial.println(deserializedData.protocol);
+  Serial.print(F("Address: "));
+  Serial.println(deserializedData.address);
+  Serial.print(F("Command: "));
+  Serial.println(deserializedData.command);
+  Serial.print(F("Raw Data Length: "));
+  Serial.println(deserializedData.rawDataLength);
+  Serial.print(F("Raw Data: "));
+  for (int i = 0; i < deserializedData.rawDataLength; i++)
+  {
+    Serial.print(deserializedData.rawData[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+#endif
+  return deserializedData;
 }
