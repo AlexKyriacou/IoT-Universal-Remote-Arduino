@@ -1,0 +1,33 @@
+title Registering TV ON Button
+
+participant User
+participant WebInterface
+participant Database
+participant Edge Device
+participant TVRemote
+participant IoT Node
+
+
+activate User
+activate IoT Node
+activate Edge Device
+User->WebInterface:Clicks "Add New Control" Button
+activate WebInterface
+WebInterface->User: Serves Add New Control Page
+deactivate WebInterface
+User->WebInterface:Enters New Button Name : "TV ON"
+activate WebInterface
+User->TVRemote:Press ON Button
+activate TVRemote
+TVRemote->IoT Node:Sends Corresponding IR Signal
+deactivate TVRemote
+IoT Node->Edge Device:Sends Captured Signal Via Serial Port
+Edge Device->WebInterface:Display Captured Signal
+User->WebInterface:Verify Captured Signal Is Correct
+WebInterface->Database:Store Captured Signal In Database
+WebInterface->User:Serve Dashboard Page
+WebInterface->Database:Query Stored Buttons
+activate Database
+Database-->WebInterface:Return Button Data
+deactivate Database
+WebInterface->User:Populate Dashboard Page

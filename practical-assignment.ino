@@ -127,10 +127,11 @@ void loop()
       {
         IRData receivedIRData;
         receivedIRData.protocol = static_cast<decode_type_t>(receivedData.protocol);
+        Serial.print(getProtocolString(receivedIRData.protocol));
         receivedIRData.address = receivedData.address;
         receivedIRData.command = receivedData.command;
-        IrSender.write(&receivedIRData);
-        Serial.println(F("Sent IR data"));
+        IrSender.write(&receivedIRData, 1);
+        Serial.println(F(" IR DATA SENT"));
       }
     }
     if (button.pressed())
@@ -182,7 +183,7 @@ DeserializedData deserializeJson(String jsonString)
 
   // Parse protocol
   start = jsonString.indexOf("PROTOCOL") + 10;
-  end = jsonString.indexOf(",", start);
+  end = jsonString.indexOf(",", start); 
   deserializedData.protocol = jsonString.substring(start, end).toInt();
 
   // Parse address
